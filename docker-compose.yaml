@@ -1,0 +1,33 @@
+version: '3.8'
+
+services:
+  server:
+    build:
+      context: .
+      dockerfile: Dockerfile.server
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./configs:/root/configs
+    environment:
+      - SERVER_ADDRESS=:8080
+      - LOG_LEVEL=debug
+    healthcheck:
+      test: ["CMD", "nc", "-z", "localhost", "8080"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    restart: unless-stopped
+
+  client:
+    build:
+      context: .
+      dockerfile: Dockerfile.client
+    volumes:
+      - ./configs:/root/configs
+    environment:
+      - SERVER_ADDRESS=server:8080
+      - LOG_LEVEL=debug
+    depends_on:
+      server:
+        condition: service_healthy
