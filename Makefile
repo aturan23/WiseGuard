@@ -94,6 +94,17 @@ run-ddos-heavy: build-ddos
 	@echo "Running heavy DDoS simulation..."
 	./bin/ddos -clients 1000 -duration 60s
 
+## Protection testing tool
+build-protection:
+	@echo "Running protection testing tool..."
+	go build -o bin/protection ./tools/protection/main.go
+
+run-protection: build-protection
+	./bin/protection -attack invalid_pow -clients 50 -duration 10s
+	./bin/protection -attack connection_limit -clients 50 -duration 10s
+	./bin/protection -attack failed_attempts -clients 50 -duration 10s
+	./bin/protection -attack slowloris -clients 50 -duration 10s
+
 # Help
 help:
 	@echo "Available commands:"
@@ -115,3 +126,4 @@ help:
 	@echo " make build-ddos     - Build DDoS testing tool"
 	@echo " make run-ddos      - Run DDoS simulation"
 	@echo " make run-ddos-heavy - Run heavy DDoS simulation"
+	@echo " make run-protection - Run protection testing tool"

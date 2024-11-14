@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net"
 	"sync"
 	"sync/atomic"
@@ -10,6 +11,8 @@ import (
 	"wiseguard/pkg/logger"
 	"wiseguard/pkg/pow"
 	"wiseguard/pkg/quotes"
+	"wiseguard/pkg/server/protection"
+	"wiseguard/pkg/server/ratelimit"
 )
 
 // Config server configuration
@@ -29,6 +32,9 @@ type Server struct {
 	listener     net.Listener
 	powService   pow.Service
 	quoteService quotes.Service
+	rateLimiter  *ratelimit.IPRateLimiter
+	conLimiter   *ratelimit.ConnectionLimiter
+	protection   *protection.Protection
 
 	// State
 	activeConns  sync.WaitGroup
@@ -42,6 +48,18 @@ type Server struct {
 }
 
 func NewServer(cfg *Config, log logger.Logger, pow pow.Service, quotes quotes.Service, ctx context.Context) *Server {
+	protectionCfg := &protection.ProtectionConfig{
+		MinReadRate:         100,
+		ReadTimeout:         5 * time.Second,
+		EnableIPFilter:      true,
+		MaxFailedAttempts:   5,
+		FailedBlockTime:     15 * time.Minute,
+		MemoryThreshold:     80,
+		MemoryCheckInterval: time.Minute,
+		TokenBucketSize:     100,
+		TokenFillRate:       10,
+	}
+
 	srv := &Server{
 		cfg:          cfg,
 		log:          log.WithComponent("server"),
@@ -49,6 +67,9 @@ func NewServer(cfg *Config, log logger.Logger, pow pow.Service, quotes quotes.Se
 		quoteService: quotes,
 		ctx:          ctx,
 		shutdown:     make(chan struct{}),
+		rateLimiter:  ratelimit.NewIPRateLimiter(60, 10, 1*time.Hour),
+		conLimiter:   ratelimit.NewConnectionLimiter(10, 1*time.Minute), // 10 connections per IP per minute
+		protection:   protection.NewProtection(protectionCfg),
 	}
 
 	srv.difficulty.Store(uint32(cfg.InitialDifficulty))
@@ -56,6 +77,11 @@ func NewServer(cfg *Config, log logger.Logger, pow pow.Service, quotes quotes.Se
 }
 
 func (s *Server) Run() error {
+	if err := s.protection.Start(); err != nil {
+		return fmt.Errorf("failed to start protection: %w", err)
+	}
+	defer s.protection.Stop()
+
 	var err error
 	s.listener, err = net.Listen("tcp", s.cfg.Address)
 	if err != nil {
@@ -84,6 +110,43 @@ func (s *Server) Run() error {
 				continue
 			}
 
+			if err := s.protection.IsAllowed(conn.RemoteAddr()); err != nil {
+				s.log.Info("connection rejected", map[string]interface{}{
+					"remote_addr": conn.RemoteAddr().String(),
+					"reason":      err.Error(),
+				})
+				conn.Close()
+				continue
+			}
+
+			protected, err := s.protection.ProtectedConn(conn)
+			if err != nil {
+				s.log.Info("connection rejected", map[string]interface{}{
+					"remote_addr": conn.RemoteAddr().String(),
+					"reason":      err.Error(),
+				})
+				conn.Close()
+				continue
+			}
+
+			// Check connection limit before accepting connection
+			if !s.conLimiter.AllowConnection(conn.RemoteAddr()) {
+				s.log.Info("connection rejected due to connection limit", map[string]interface{}{
+					"remote_addr": conn.RemoteAddr().String(),
+				})
+				conn.Close()
+				continue
+			}
+
+			// Check rate limit before accepting connection
+			if !s.rateLimiter.AllowConnection(conn.RemoteAddr()) {
+				s.log.Info("connection rejected due to rate limit", map[string]interface{}{
+					"remote_addr": conn.RemoteAddr().String(),
+				})
+				conn.Close()
+				continue
+			}
+
 			// Check if we reached max connections
 			if s.currentConns.Load() >= int32(s.cfg.MaxConnections) {
 				s.log.Info("max connections reached, dropping connection", map[string]interface{}{
@@ -100,6 +163,8 @@ func (s *Server) Run() error {
 				defer func() {
 					s.activeConns.Done()
 					s.currentConns.Add(-1)
+					s.conLimiter.RemoveConnection(conn.RemoteAddr())
+					protected.Close()
 					conn.Close()
 				}()
 
@@ -107,6 +172,9 @@ func (s *Server) Run() error {
 					s.log.Error("connection error", err, map[string]interface{}{
 						"remote_addr": conn.RemoteAddr().String(),
 					})
+					if !errors.Is(err, net.ErrClosed) {
+						s.protection.RegisterFailure(conn.RemoteAddr())
+					}
 				}
 			}()
 		}

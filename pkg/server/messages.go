@@ -6,13 +6,13 @@ import (
 	"net"
 	"wiseguard/pkg/pow"
 	"wiseguard/pkg/protocol"
+	"wiseguard/pkg/utils"
 )
 
 // readMessage reads a message from the client
 func (s *Server) readMessage(conn net.Conn) (*protocol.Message, error) {
 	headerBuf := make([]byte, protocol.HeaderSize)
-	_, err := conn.Read(headerBuf)
-	if err != nil {
+	if err := utils.ReadFull(conn, headerBuf, s.cfg.ReadTimeout); err != nil {
 		return nil, fmt.Errorf("failed to read header: %w", err)
 	}
 
@@ -21,10 +21,13 @@ func (s *Server) readMessage(conn net.Conn) (*protocol.Message, error) {
 		return nil, fmt.Errorf("failed to unmarshal header: %w", err)
 	}
 
+	if msg.Length > protocol.MaxMessageSize-protocol.HeaderSize {
+		return nil, protocol.ErrMessageTooLarge
+	}
+
 	if msg.Length > 0 {
 		payload := make([]byte, msg.Length)
-		_, err := conn.Read(payload)
-		if err != nil {
+		if err := utils.ReadFull(conn, payload, s.cfg.ReadTimeout); err != nil {
 			return nil, fmt.Errorf("failed to read payload: %w", err)
 		}
 		msg.Payload = payload

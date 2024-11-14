@@ -30,6 +30,81 @@ The PoW algorithm uses HashCash based on SHA-256. Clients must find a nonce wher
 3. Connection Limiting: Configurable limit on simultaneous connections
 4. Solution Validation: Strict verification of all PoW solutions
 
+## Vulnerability protection
+
+WiseGuard implements multiple layers of protection against various types of attacks:
+
+### 1. Rate Limiting
+- IP-based rate limiting using token bucket algorithm
+- Configurable requests per second limits
+- Automatic temporary IP blocking after exceeding limits
+```yaml
+PROTECTION_TOKEN_BUCKET_SIZE=100    # Maximum burst size
+PROTECTION_TOKEN_FILL_RATE=10       # Tokens per second
+```
+
+### 2. Connection Control
+- Limits concurrent connections per IP
+- Protection against connection flooding
+```yaml
+SERVER_MAX_CONNECTIONS=1000
+SERVER_READ_TIMEOUT=5s
+SERVER_WRITE_TIMEOUT=5s
+```
+
+### 3. Failed Attempts Protection
+- Tracks and limits failed authentication attempts
+- Temporary IP blocking after multiple failures
+```yaml
+PROTECTION_MAX_FAILED_ATTEMPTS=5
+PROTECTION_FAILED_BLOCK_TIME=15m
+```
+
+### 4. Slow Connection Protection
+- Defends against Slowloris-type attacks
+- Enforces minimum data transfer rates
+```yaml
+PROTECTION_MIN_READ_RATE=100        # bytes per second
+PROTECTION_READ_TIMEOUT=10s
+```
+
+### 5. Memory Protection
+- Monitors and manages memory usage
+- Prevents memory exhaustion attacks
+```yaml
+PROTECTION_MEMORY_THRESHOLD=80      # percentage
+PROTECTION_MEMORY_CHECK_INTERVAL=1m
+```
+
+## Protection Testing
+
+WiseGuard includes a protection testing tool that simulates various attacks:
+
+### Available Attack Simulations
+1. **Invalid PoW Attack**: Tests PoW verification
+2. **Connection Limit Attack**: Tests connection management
+3. **Failed Attempts Attack**: Tests brute force protection
+4. **Slowloris Attack**: Tests slow connection protection
+
+### Running Protection Tests
+```bash
+# Run all protection tests
+make run-protection
+
+# Run specific attack test
+./bin/protection -attack [attack_type] -clients [num] -duration [time]
+
+# Example
+./bin/protection -attack invalid_pow -clients 50 -duration 10s
+```
+
+The testing tool provides metrics including:
+- Blocked/Failed/Successful request counts
+- Requests per second (RPS)
+- Success rate percentage
+
+A successful test should show 0% success rate for attack attempts, indicating that protection mechanisms are working correctly.
+
 ## Requirements
 
 - Go 1.22 or higher
